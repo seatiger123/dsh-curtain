@@ -7,7 +7,7 @@
 ## 一、你的工作流（只有一个循环）
 
 ```
-C:\dsh\dsh-curtain\打开预览.cmd   ← 双击一次，浏览器会停在那儿
+C:\dsh\dsh-curtain\preview\index.html   ← 双击一次，浏览器会停在那儿
         │
         ▼
    改 lib/boot.css          （颜色、字体、布局、动效）

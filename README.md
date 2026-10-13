@@ -101,7 +101,7 @@ dsh plugin --profile desktop remove dsh-curtain
 仓库里带了一个**离线预览页**，改样式不用反复重启 DSH：
 
 ```
-双击 打开预览.cmd
+用浏览器直接打开 preview/index.html
 ```
 
 它加载的是**和 DSH 里完全同一份** `lib/boot.css` 和 `lib/boot.js`，

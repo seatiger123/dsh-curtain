@@ -1,5 +1,4 @@
 * text=auto eol=lf
-*.cmd text eol=crlf
 *.aac binary
 *.m4a binary
 *.jpg binary
