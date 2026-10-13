@@ -1,0 +1,11 @@
+# dsh-curtain — DSH bundle 补丁层
+#
+# 这一层把插件的「宿主半边」挂进当前 profile 的配置树。
+# 「浏览器半边」由 package.json 的 dsh.client 声明，DSH 会自动组装，不用写在这里。
+#
+# 安装：
+#   dsh plugin --profile desktop add -w link:C:/dsh/dsh-curtain
+# （改完 lib/client.js 刷新页面生效；改 lib/index.js 需要重启 DSH）
+- insert:
+    - id: dsh-curtain
+      name: dsh-curtain

@@ -1,0 +1,2225 @@
+/* ============================================================================
+ * dsh-curtain · boot.css —— 开机动画的全部视觉
+ * ----------------------------------------------------------------------------
+ * 基调：暗色重工业 HUD —— 近黑冷调底 · 单一琥珀黄 · 满屏精密细线与刻度
+ *
+ * 这个文件和 lib/boot.js 是「美术区」。JS 只负责「什么时候给哪个节点加 dc-in」，
+ * 画面长什么样 100% 由这里决定。
+ *
+ * 三条硬规则（破坏了会出真问题）：
+ *   ① .dc-root 必须始终「不透明 + 全屏」。它是覆盖层的地基，
+ *      一旦透明，开机瞬间会闪出 DSH 主界面。
+ *   ② 不要在「全屏大图层」上做 filter: blur() 或持续的 opacity 动画。
+ *      那会每帧重绘整屏，老机器直接卡。（要质感就用静态渐变或静态图。）
+ *   ③ 非全屏元素做持续动效是安全的（例如圆钮上那圈旋转弧线）。
+ *   ④ 凡是 border-radius 配圆形的元素，必须同时写 corner-shape: round。
+ *      DSH 的 Chromium 里 corner-shape 默认是 squircle，不写就成圆角方形。
+ * ========================================================================== */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 A · 全局变量
+   ───────────────────────────────────────────────────────────────────────────
+   换整体气质基本就是改这一块。--dc-bg / --dc-fg / --dc-accent 会被 JS 用
+   配置里的值覆盖（设置页可改），其它留在这里由你定。
+   配色基准取自底图采样：整幅平均 rgb(14,17,20)，上部 rgb(11,14,17)。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-root {
+  /* 主色（可被设置页覆盖）：近黑冷调底 · 冷白字 · 单一琥珀黄 */
+  --dc-bg: #0b0e11;
+  --dc-fg: #e6ecf2;
+  --dc-accent: #f2c21c;
+
+  /* 派生色 —— 用 color-mix 从主色算出来，改主色就自动跟着变 */
+  --dc-fg-dim: color-mix(in srgb, var(--dc-fg) 64%, transparent);
+  --dc-fg-faint: color-mix(in srgb, var(--dc-fg) 34%, transparent);
+  --dc-fg-ghost: color-mix(in srgb, var(--dc-fg) 17%, transparent);
+  --dc-line: color-mix(in srgb, var(--dc-fg) 13%, transparent);
+  --dc-line-strong: color-mix(in srgb, var(--dc-fg) 28%, transparent);
+  --dc-accent-dim: color-mix(in srgb, var(--dc-accent) 55%, transparent);
+  --dc-accent-soft: color-mix(in srgb, var(--dc-accent) 14%, transparent);
+  --dc-accent-glow: color-mix(in srgb, var(--dc-accent) 32%, transparent);
+
+  /* 底图相关 —— 固定值，不跟随主题（就是那张照片的暗部） */
+  --dc-veil: rgba(7, 9, 12, 0.66);          /* 整幅压暗 */
+  --dc-veil-top: rgba(7, 9, 12, 0.94);      /* 顶部加重，给 HUD 文字让位 */
+  --dc-hazard: repeating-linear-gradient(
+      45deg,
+      var(--dc-accent) 0 5px,
+      transparent 5px 10px);
+
+  /* 框架层 HUD 的边距。定义在 root 上，这样加载块/角标也能对齐同一条边。 */
+  --hud-pad: clamp(12px, 1.2vw, 20px);
+  --hud-inset: calc(var(--hud-pad) + 26px);
+
+  /* 字体栈 —— 想换字体改这里 */
+  --dc-font-display: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --dc-font-mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+
+  /* 排版尺度 */
+  --dc-title-size: clamp(32px, 5.8vw, 84px);
+  --dc-title-track: 0.34em;
+  --dc-status-size: clamp(19px, 2.4vw, 32px);
+  --dc-sub-size: clamp(11px, 1.02vw, 14px);
+  --dc-sub-track: 0.22em;
+
+  /* 版心边距与进度条 */
+  --dc-pad: clamp(28px, 4.4vw, 68px);
+  --dc-bar-h: 2px;
+
+  /* 中央圆钮直径 */
+  --dc-dial-size: clamp(180px, 24vw, 300px);
+
+  /* 全局速度倍率：JS 会写进来 */
+  --dc-speed: 1;
+
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;           /* 压过 DSH 的启动卡 */
+  overflow: hidden;
+  background: var(--dc-bg);
+  color: var(--dc-fg);
+  font-family: var(--dc-font-display);
+  -webkit-font-smoothing: antialiased;
+  /* ☠️ 这一条不能删。
+     DSH 的 Chromium 构建里 corner-shape 的默认值是 squircle（超椭圆）而不是 round，
+     所以朴素的 border-radius:50% 会渲染成"圆角方形"而不是正圆。
+     证据：DSH 自己的 CSS 里 8 处 border-radius:50% 全都紧跟着一个 corner-shape:round。
+     在这里设一次，凡是能继承到的地方都受益；具体圆形元素上还会再写一遍保险。 */
+  corner-shape: round;
+}
+
+/* ☠️ [hidden] 必须真的隐藏。
+   我们自己写的 display:flex / block 会盖过浏览器默认的 [hidden]{display:none}，
+   所以像 .dc-load 这种自带 display 的元素，光靠 JS 设 hidden 属性是**不会**消失的。
+   （这个坑真踩过：左上角加载块从协议屏之后一直没退场，压在英雄屏的厂牌上。）
+   这一条放在最外层兜底，以后新元素忘了写 display:none 也不会再犯。 */
+.dc-root [hidden] { display: none !important; }
+
+/* 动画期间锁滚动。JS 在 finish() 里必须摘掉，否则主界面永远滚不动。 */
+html.dc-lock,
+html.dc-lock body { overflow: hidden !important; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 B · 底层：纯色底（底图在 M 区）
+   ───────────────────────────────────────────────────────────────────────────
+   就是 --dc-bg 一块纯色，垫在底图下面（底图没加载出来时不至于穿帮）。
+   想额外加质感（暗角 / 细网格 / 点阵）就加在这一层，但守 C 区那条规矩：
+   **用静态渐变或静态图**，不要在全屏图层上做持续动效。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-stage {
+  position: absolute;
+  inset: 0;
+  background: var(--dc-bg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 C · 四角框 / 扫描线
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-frame {
+  position: absolute;
+  inset: var(--dc-pad);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity calc(600ms / var(--dc-speed)) ease;
+}
+.dc-frame.dc-in { opacity: 1; }
+
+.dc-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--dc-line-strong);
+}
+.dc-corner.tl { top: 0; left: 0;  border-right: 0; border-bottom: 0; }
+.dc-corner.tr { top: 0; right: 0; border-left: 0;  border-bottom: 0; }
+.dc-corner.bl { bottom: 0; left: 0;  border-right: 0; border-top: 0; }
+.dc-corner.br { bottom: 0; right: 0; border-left: 0;  border-top: 0; }
+
+/* 扫描线：白底上不能压黑，改用极淡的蓝，像一道光扫过 */
+.dc-scanline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 20%;
+  opacity: 0;
+  background: linear-gradient(to bottom, transparent, var(--dc-accent-soft), transparent);
+}
+.dc-scanline.dc-go {
+  animation: dc-scan calc(760ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1) 1;
+}
+@keyframes dc-scan {
+  0%   { opacity: 0;    transform: translateY(-120%); }
+  18%  { opacity: 1; }
+  100% { opacity: 0;    transform: translateY(560%); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 D · 左上角加载块
+   ───────────────────────────────────────────────────────────────────────────
+   全部等宽大写 + 宽字距，和 HUD 其它文字同一套语言。
+   文案在 boot.js 顶部的 LOADING 常量里。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-load {
+  position: absolute;
+  /* 让位给左上角的框架层铭牌 —— 两者原本都在左上角，会叠在一起 */
+  top: calc(var(--hud-inset) + 100px);
+  left: var(--hud-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-family: var(--dc-font-mono);
+  color: var(--dc-fg);
+  opacity: 0;
+  transform: translateY(-7px);
+  transition: opacity calc(700ms / var(--dc-speed)) ease,
+              transform calc(700ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-load.dc-in { opacity: 1; transform: translateY(0); }
+/* ☠️ 这条不能删。JS 在幕二开头会给加载块加 dc-gone，
+   但 CSS 里没有对应规则的话它就是一句空话 ——
+   加载块会一直亮着，直到幕三前 `hidden = true` 把它**直接**切掉，
+   看起来就是"第一幕结束后没消失，第三幕才突然不见"。（真踩过）
+   必须放在 .dc-in 之后：两者权重相同（0,2,0），靠顺序决定谁赢。 */
+.dc-load.dc-gone { opacity: 0; transform: translateY(-7px); }
+
+.dc-load-brand { display: flex; align-items: baseline; gap: 10px; }
+.dc-load-brand b {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.34em;
+}
+.dc-load-brand span {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-faint);
+}
+
+.dc-load-rule { width: 136px; height: 1px; background: var(--dc-line); }
+
+.dc-load-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-dim);
+}
+.dc-load-pct {
+  color: var(--dc-fg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+}
+
+.dc-load-bar {
+  position: relative;
+  width: 172px;
+  height: 1px;
+  background: var(--dc-line);
+  overflow: hidden;
+}
+.dc-load-bar i {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 0%;
+  background: var(--dc-fg);
+  transition: width 180ms linear;
+}
+
+.dc-load-log {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--dc-fg-faint);
+  min-height: 1.2em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 E · 角标（右上 / 右下）
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-meta,
+.dc-foot {
+  position: absolute;
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--dc-sub-track);
+  text-transform: uppercase;
+  color: var(--dc-fg-faint);
+  opacity: 0;
+  transition: opacity calc(900ms / var(--dc-speed)) ease;
+}
+.dc-meta.dc-in,
+.dc-foot.dc-in { opacity: 1; }
+.dc-meta { top: calc(var(--hud-inset) + 82px); right: var(--hud-inset); text-align: right; }
+.dc-foot { bottom: calc(var(--hud-pad) + 92px); right: var(--hud-inset); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 F · 中央圆钮（第一幕的主角）
+   ───────────────────────────────────────────────────────────────────────────
+   结构（都在 lib/boot.js 的模板里）：
+     .dc-dial-wrap
+       .dc-dial-halo        点击后的蓝色辉光
+       .dc-dial-brackets    四角工业角标
+       button.dc-dial
+         .dc-dial-ring      最外圈细线
+         .dc-dial-ticks     刻度环（conic-gradient + mask）
+         .dc-dial-scan      缓慢旋转的弧线
+         .dc-dial-inner     内圈底盘（带一点高光）
+         .dc-dial-label     圈内顶部极小字
+         svg.dc-dial-whale  鲸鱼：底层灰 + 上层蓝（一笔画）
+     .dc-dial-caption       圈下提示文字
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-dial-wrap {
+  position: relative;
+  width: var(--dc-dial-size);
+  height: var(--dc-dial-size);
+  /* 关键：绝不允许被 flex 压扁。
+     .dc-center 是纵向 flex 容器，默认 flex-shrink:1 ——
+     内容一超高（窗口矮、或标题字号大），这个正方就会被压成长方形，
+     里面的 border-radius:50% 于是变成椭圆，看起来"不是正圆"。 */
+  flex: none;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity calc(800ms / var(--dc-speed)) ease,
+              transform calc(1000ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-dial-wrap.dc-in { opacity: 1; transform: scale(1); }
+.dc-dial-wrap.dc-gone {
+  opacity: 0;
+  transform: scale(0.86);
+  transition: opacity calc(500ms / var(--dc-speed)) ease,
+              transform calc(600ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dc-dial-wrap[hidden],
+.dc-dial-caption[hidden] { display: none !important; }
+
+/* ── 按钮基线重置（只针对中央圆钮）─────────────────────────────────────────
+   宿主或系统可能给 <button> 加上默认控件外观（圆角方块 + 底色 + 边框），
+   把圆钮压成一个方按钮。这里用足够高的选择器权重 + 显式圆形钉死。
+   其它按钮（接受协议 / 确认 / 跳过）本来就是方形，不加这条，
+   免得用更高的权重覆盖掉它们各自的 padding 与边框。 */
+.dc-root button.dc-dial {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 50%;
+  corner-shape: round;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dc-dial {
+  position: relative;
+  display: block;
+  width: 100%;
+  /* 双保险：不吃父级给的高度，自己锁成正方。
+     即使祖先因为任何原因给出了长方形，这个按钮也一定是正方形的 ——
+     border-radius:50% 只有在正方上才是正圆。 */
+  height: auto;
+  aspect-ratio: 1 / 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.dc-dial > * { pointer-events: none; }
+
+.dc-dial-ring,
+.dc-dial-ticks,
+.dc-dial-scan,
+.dc-dial-inner,
+.dc-dial-halo {
+  position: absolute;
+  border-radius: 50%;
+  corner-shape: round;           /* 少这行就是圆角方形，不是圆 */
+}
+
+/* 最外圈：一条干净的细线 */
+.dc-dial-ring {
+  inset: 0;
+  border: 1px solid var(--dc-line-strong);
+  transition: border-color 300ms ease, box-shadow 400ms ease;
+}
+
+/* 刻度环：放射状细密刻度，只在靠近外缘的一圈出现 */
+.dc-dial-ticks {
+  inset: 4px;
+  opacity: 0.8;
+  background: repeating-conic-gradient(from 0deg,
+      var(--dc-line-strong) 0deg 0.9deg,
+      transparent 0.9deg 7.5deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 80%, #000 80% 100%);
+          mask: radial-gradient(circle at 50% 50%, transparent 0 80%, #000 80% 100%);
+  transition: opacity 400ms ease;
+}
+
+/* 外圈分段齿环：像车床车出来的一圈齿，是"机械感"的主要来源。
+   用 repeating-conic-gradient 画放射细线，再用 mask 只留最外一圈。 */
+.dc-dial-ring::after {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: repeating-conic-gradient(from 0deg,
+      var(--dc-line-strong) 0deg 1.1deg,
+      transparent 1.1deg 9deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 92%, #000 92% 100%);
+          mask: radial-gradient(circle at 50% 50%, transparent 0 92%, #000 92% 100%);
+  pointer-events: none;
+}
+
+/* 缓慢旋转的弧线：给静态画面一点"在工作"的生命感。
+   只染一条边 = 四分之一弧，才是"扫"的感觉；染两条会看成同心双圈。 */
+.dc-dial-scan {
+  inset: -9px;
+  border: 1px solid transparent;
+  border-top-color: var(--dc-accent);
+  opacity: 0.28;
+  animation: dc-spin calc(9000ms / var(--dc-speed)) linear infinite;
+  transition: opacity 500ms ease;
+}
+@keyframes dc-spin { to { transform: rotate(360deg); } }
+
+/* 内圈底盘：暗色径向渐变 + 内阴影，做出"凹陷的金属"感 */
+.dc-dial-inner {
+  inset: 17%;
+  border: 1px solid var(--dc-line);
+  background: radial-gradient(circle at 50% 36%,
+      color-mix(in srgb, var(--dc-fg) 10%, var(--dc-bg)) 0%,
+      color-mix(in srgb, var(--dc-fg) 4%, var(--dc-bg)) 70%,
+      var(--dc-bg) 100%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--dc-fg) 15%, transparent),
+    0 20px 46px -22px rgba(0, 0, 0, 0.92);
+  transition: border-color 400ms ease, box-shadow 400ms ease;
+}
+
+/* 悬停时扫过按钮面的浅蓝光。
+   裁在圆内、压在内盘之上、鲸鱼之下 —— 光扫过去不会把图标冲糊。
+   动画带一段长停顿后再扫一次，所以悬停不动时按钮是"活的"。 */
+.dc-dial-sheen {
+  position: absolute;
+  inset: 17%;
+  border-radius: 50%;
+  corner-shape: round;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dc-dial-sheen::before {
+  content: '';
+  position: absolute;
+  top: -30%;
+  bottom: -30%;
+  left: 0;
+  width: 46%;
+  opacity: 0;
+  transform: translateX(-190%) skewX(-16deg);
+  background: linear-gradient(100deg,
+      transparent 0%,
+      color-mix(in srgb, var(--dc-accent) 20%, transparent) 42%,
+      color-mix(in srgb, var(--dc-accent) 40%, transparent) 56%,
+      transparent 100%);
+}
+.dc-dial:hover .dc-dial-sheen::before,
+.dc-dial:focus-visible .dc-dial-sheen::before {
+  animation: dc-sheen calc(2600ms / var(--dc-speed)) cubic-bezier(0.3, 0, 0.2, 1) infinite;
+}
+@keyframes dc-sheen {
+  0%   { transform: translateX(-190%) skewX(-16deg); opacity: 0; }
+  7%   { opacity: 1; }
+  34%  { transform: translateX(250%) skewX(-16deg); opacity: 1; }
+  37%  { opacity: 0; }
+  100% { transform: translateX(250%) skewX(-16deg); opacity: 0; }
+}
+
+/* 圈内顶部极小字 */
+.dc-dial-label {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--dc-font-mono);
+  font-size: 8px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--dc-fg-faint);
+  white-space: nowrap;
+  border-radius: 0;
+}
+
+/* 鲸鱼：两层同路径 —— 底层灰常在，上层蓝由 JS 一笔画出来 */
+.dc-dial-whale {
+  position: absolute;
+  inset: 16% 8% 6% 8%;
+  margin: auto;
+  width: 42%;
+  height: 42%;
+  overflow: visible;
+  border-radius: 0;
+}
+.dc-dial-whale path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* 刻意「不用」vector-effect: non-scaling-stroke ——
+     它会让 stroke-dasharray 按屏幕单位解释，而路径长度是用户单位，两者对不上，
+     结果就是「一笔画」末段永远画不满（线条缺一截）。
+     用用户单位后，线宽随圆钮大小等比缩放，这本身也是想要的效果。 */
+}
+.dc-whale-base {
+  stroke: color-mix(in srgb, var(--dc-fg) 32%, transparent);
+  stroke-width: 0.55;
+  transition: stroke 400ms ease;
+}
+.dc-whale-ink {
+  stroke: var(--dc-accent);
+  stroke-width: 0.9;
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+/* 点击后的蓝色辉光 */
+.dc-dial-halo {
+  inset: -22%;
+  opacity: 0;
+  transform: scale(0.82);
+  background: radial-gradient(circle,
+      color-mix(in srgb, var(--dc-accent) 24%, transparent) 0%,
+      transparent 62%);
+  transition: opacity calc(800ms / var(--dc-speed)) ease,
+              transform calc(1000ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 四角工业角标 */
+.dc-dial-brackets {
+  position: absolute;
+  inset: -14px;
+  pointer-events: none;
+}
+.dc-dial-brackets i {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--dc-line-strong);
+  border-radius: 0;
+}
+.dc-dial-brackets i:nth-child(1) { top: 0; left: 0;  border-right: 0; border-bottom: 0; }
+.dc-dial-brackets i:nth-child(2) { top: 0; right: 0; border-left: 0;  border-bottom: 0; }
+.dc-dial-brackets i:nth-child(3) { bottom: 0; left: 0;  border-right: 0; border-top: 0; }
+.dc-dial-brackets i:nth-child(4) { bottom: 0; right: 0; border-left: 0;  border-top: 0; }
+
+/* 悬停：整圈收紧一点，给出"可以按"的暗示 */
+.dc-dial:hover .dc-dial-ring { border-color: color-mix(in srgb, var(--dc-accent) 55%, transparent); }
+.dc-dial:hover .dc-dial-ticks { opacity: 0.8; }
+.dc-dial:hover .dc-dial-inner { border-color: color-mix(in srgb, var(--dc-accent) 30%, transparent); }
+.dc-dial:hover .dc-dial-halo { opacity: 0.45; transform: scale(1); }
+
+/* 按下（is-armed）：整圈转成蓝 */
+.dc-dial.is-armed .dc-dial-ring {
+  border-color: var(--dc-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--dc-accent) 22%, transparent);
+}
+.dc-dial.is-armed .dc-dial-ticks { opacity: 0.95; }
+.dc-dial.is-armed .dc-dial-scan { opacity: 0.85; }
+.dc-dial.is-armed .dc-dial-inner { border-color: color-mix(in srgb, var(--dc-accent) 34%, transparent); }
+.dc-dial.is-armed .dc-dial-halo { opacity: 1; transform: scale(1.16); }
+.dc-dial.is-armed .dc-whale-ink { opacity: 1; }
+/* 灰底在点击后化掉 —— 让"一笔画"真的像在空处画线，而不是盖在灰线上 */
+.dc-dial.is-armed .dc-whale-base {
+  stroke: transparent;
+  transition: stroke calc(700ms / var(--dc-speed)) ease;
+}
+
+/* 圈下提示文字 */
+.dc-dial-caption {
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--dc-fg-faint);
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease,
+              color 400ms ease,
+              letter-spacing 500ms ease;
+}
+.dc-dial-caption.dc-in { opacity: 1; }
+.dc-dial-caption.dc-gone { opacity: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 G · 中央区（圆钮 + 标题 + 副标 + 分隔线）
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(16px, 2.4vw, 30px);
+  text-align: center;
+  padding: 0 var(--dc-pad);
+  transition: opacity calc(420ms / var(--dc-speed)) ease,
+              transform calc(420ms / var(--dc-speed)) ease;
+}
+.dc-center.dc-off { opacity: 0; transform: scale(1.04); }
+
+.dc-title {
+  margin: 0;
+  font-size: var(--dc-title-size);
+  font-weight: 600;
+  letter-spacing: var(--dc-title-track);
+  text-indent: var(--dc-title-track);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity calc(760ms / var(--dc-speed)) ease,
+              transform calc(760ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-title.dc-in { opacity: 1; transform: translateY(0); }
+
+.dc-sub {
+  font-family: var(--dc-font-mono);
+  font-size: var(--dc-sub-size);
+  letter-spacing: var(--dc-sub-track);
+  text-transform: uppercase;
+  color: var(--dc-fg-dim);
+  min-height: 1.4em;
+  opacity: 0;
+  transition: opacity calc(400ms / var(--dc-speed)) ease;
+}
+.dc-sub.dc-in { opacity: 1; }
+.dc-ch {
+  opacity: 0;
+  transition: opacity calc(320ms / var(--dc-speed)) ease;
+}
+.dc-sub.dc-in .dc-ch,
+
+
+.dc-rule {
+  width: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--dc-accent), transparent);
+  transition: width calc(680ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-rule.dc-in { width: min(46vw, 420px); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 J · 交互（确认按钮 / 提示 / 跳过）
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-action {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--dc-pad) + 8px);
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity calc(300ms / var(--dc-speed)) ease;
+}
+.dc-action.dc-in { opacity: 1; pointer-events: auto; }
+
+
+.dc-btn:hover {
+  border-color: var(--dc-accent);
+  color: var(--dc-accent);
+  background: color-mix(in srgb, var(--dc-accent) 14%, transparent);
+}
+
+@keyframes dc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dc-accent) 30%, transparent); }
+  50%      { box-shadow: 0 0 0 7px color-mix(in srgb, var(--dc-accent) 0%, transparent); }
+}
+
+.dc-hint {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--dc-pad) - 22px);
+  text-align: center;
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--dc-fg-faint);
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.dc-hint.dc-in { opacity: 1; }
+
+.dc-skip {
+  position: absolute;
+  top: var(--dc-pad);
+  right: var(--dc-pad);
+  transform: translateY(-26px);
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--dc-fg-faint);
+  background: none;
+  border: 0;
+  padding: 6px 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 500ms ease, color 200ms ease, transform 500ms ease;
+}
+.dc-skip.dc-in { opacity: 1; transform: translateY(0); }
+.dc-skip:hover { color: var(--dc-accent); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 K · 揭幕
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* 白底上 screen 混合是无效的，这里用正常混合的一层蓝晕 */
+
+
+/* 揭幕：整个覆盖层"机位后撤 + 淡出" */
+.dc-root.dc-handoff {
+  opacity: 0;
+  transform: scale(1.03);
+  pointer-events: none;
+  transition: opacity calc(760ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1),
+              transform calc(760ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 L · 协议场景（点击圆钮之后的下一幕）
+   ───────────────────────────────────────────────────────────────────────────
+   整屏一张协议卡片，三块：
+     ① .dc-code       背景滚动的终端日志（三列，很淡）
+     ② .dc-pact       卡片本体：顶栏 / 左徽 / 右文 / 底部同意按钮
+     ③ 两侧竖排装饰小字
+   文案在 boot.js 的 AGREEMENT 常量里，徽记路径是 EMBLEM_PATH。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-agree {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity calc(620ms / var(--dc-speed)) ease,
+              transform calc(760ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dc-agree.dc-in { opacity: 1; pointer-events: auto; }
+.dc-agree.dc-gone { opacity: 0; transform: scale(1.03); }
+.dc-agree[hidden] { display: none !important; }
+
+/* ── ① 背景终端日志 ──────────────────────────────────────────────────────
+   三列并排铺满整屏。每列是「裁切窗 + 滚动内容」两层，内层用 transform
+   滚动（纯合成，几乎不要钱）。内容在 JS 里复制两份 → 位移 -50% 无缝循环。 */
+.dc-code {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  gap: clamp(14px, 2.2vw, 44px);
+  padding: 0 clamp(8px, 1.4vw, 24px);
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+}
+.dc-code-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.dc-code-track {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: var(--dc-font-mono);
+  font-size: 10.5px;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--dc-fg) 15%, transparent);
+  will-change: transform;
+  animation: dc-code-roll linear infinite;
+  animation-play-state: paused;   /* 场景没进场就不烧 GPU */
+}
+.dc-agree.dc-in .dc-code-track { animation-play-state: running; }
+@keyframes dc-code-roll {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-50%); }
+}
+.dc-code-track i { font-style: normal; }
+.dc-code-track i.hi { color: var(--dc-accent-dim); }
+.dc-code-track i.dim { color: color-mix(in srgb, var(--dc-fg) 7%, transparent); }
+
+/* 卡片外面那层压暗：让卡片从背景里"浮"出来 */
+.dc-agree-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(124% 104% at 50% 50%,
+      rgba(6, 8, 11, 0.52) 0%,
+      rgba(4, 5, 7, 0.88) 100%);
+}
+
+/* ── ③ 两侧竖排装饰小字 ────────────────────────────────────────────────── */
+.dc-agree-side {
+  position: absolute;
+  z-index: 2;
+  font-family: var(--dc-font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.3em;
+  color: var(--dc-fg-ghost);
+  white-space: nowrap;
+  pointer-events: none;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+.dc-agree-side-l { left: clamp(8px, 1.2vw, 22px); top: 50%; transform: translateY(-50%); }
+.dc-agree-side-r { right: clamp(8px, 1.2vw, 22px); top: 50%; transform: translateY(-50%) rotate(180deg); }
+
+/* ── ② 协议卡片 ────────────────────────────────────────────────────────── */
+.dc-pact {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  /* 往下让 16px：左上角的框架层铭牌有 4 行，卡片顶边原本会压住它 */
+  top: calc(50% + 16px);
+  width: min(1160px, 82vw);
+  height: min(700px, 74vh);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  /* 投影必须留在卡片这一层：底板要单独一层（背景 + 边框），
+     凡是对底板做裁剪的手段都会把投影一起裁掉，所以分层是必须的。 */
+  box-shadow: 0 42px 130px -54px rgba(0, 0, 0, 0.96);
+  opacity: 0;
+  transition: opacity calc(300ms / var(--dc-speed)) ease;
+}
+.dc-pact.dc-in { opacity: 1; }
+
+/* ── 像素级出现 ──────────────────────────────────────────────────────────
+   底板（背景 + 边框）单独一层：投影挂在卡片身上，而投影不能被裁。
+   上面盖一层 .dc-pixel 格子幕，格子颜色 = 页面底色，所以看起来就是"卡片
+   还没出现"。进场时格子逐格闪掉，卡片于是像素化地长出来。
+   格子的数量在 paintAgreement() 里（COLS × ROWS），每格的延迟写在行内 --d。 */
+.dc-pact-plate {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border: 1px solid var(--dc-line-strong);
+  background: linear-gradient(to bottom,
+      rgba(30, 35, 41, 0.975) 0%,
+      rgba(18, 21, 25, 0.975) 100%);
+}
+
+.dc-pixel {
+  position: absolute;
+  /* 外扩 1px，把底板那圈边框也盖住 */
+  inset: -1px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(34, 1fr);
+  grid-template-rows: repeat(21, 1fr);
+  pointer-events: none;
+}
+.dc-pixel i {
+  display: block;
+  background: var(--dc-bg);
+  opacity: 1;
+}
+/* 用 animation 而不是 transition：
+   ① steps(1, end) = 保持不动，然后在延迟到点时"啪"地闪掉 —— 这才是像素感，
+      用平滑淡出就变成一团雾了。
+   ② 动画的时间轴比 transition 可靠（transition 在某些渲染路径下会被推迟）。 */
+@keyframes dc-pixel-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.dc-pact.dc-in .dc-pixel i {
+  animation: dc-pixel-out calc(46ms / var(--dc-speed)) steps(1, end) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* 内容始终可见 —— 显形交给像素幕，不用再叠一层淡入，
+   否则会出现"字先浮出来、格子还在"的打架。 */
+.dc-pact-head,
+.dc-pact-main,
+.dc-pact-foot {
+  position: relative;
+  z-index: 1;
+}
+
+/* 顶边两段"探出去"的短线 —— 参考图里那种断口细节 */
+.dc-pact::before,
+.dc-pact::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  height: 1px;
+  background: var(--dc-line-strong);
+  pointer-events: none;
+}
+.dc-pact::before { left: -16px; width: 26%; }
+.dc-pact::after { right: -16px; width: 16%; }
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────────── */
+.dc-pact-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 52px;
+  padding: 0 clamp(18px, 2.2vw, 34px);
+  border-bottom: 1px solid var(--dc-line);
+}
+.dc-pact-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.26em;
+  color: var(--dc-fg-dim);
+}
+.dc-pact-tag i {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  background: var(--dc-accent);
+}
+.dc-pact-tag b { font-weight: 400; }
+.dc-pact-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--dc-font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-faint);
+}
+.dc-pact-id-name { font-weight: 400; }
+.dc-pact-globe {
+  position: relative;
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  corner-shape: round;
+}
+.dc-pact-globe::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 50%;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.65;
+}
+.dc-pact-meter { display: inline-flex; gap: 2px; }
+.dc-pact-meter b { display: block; width: 2px; height: 11px; background: currentColor; }
+.dc-pact-meter b:nth-child(2n) { opacity: 0.4; }
+.dc-pact-dash { display: block; width: 22px; height: 5px; flex: none; background: var(--dc-accent); }
+
+/* ── 主体：左徽右文 ───────────────────────────────────────────────────── */
+.dc-pact-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 33%) 1fr;
+  align-items: center;
+  gap: clamp(28px, 4vw, 76px);
+  padding: clamp(26px, 3vw, 52px) clamp(24px, 3vw, 56px);
+  overflow: hidden;
+  perspective: 1100px;         /* 百叶翻转用 */
+}
+
+/* 左侧品牌块 */
+.dc-pact-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.dc-pact-emblem {
+  position: relative;
+  width: clamp(118px, 12vw, 186px);
+  height: clamp(118px, 12vw, 186px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 22px;
+}
+.dc-pact-emblem-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--dc-line);
+  border-radius: 50%;
+  corner-shape: round;
+}
+.dc-pact-emblem-tick {
+  position: absolute;
+  inset: -13px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: repeating-conic-gradient(from 0deg,
+      var(--dc-line-strong) 0deg 1deg,
+      transparent 1deg 14deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 90%, #000 90% 100%);
+          mask: radial-gradient(circle at 50% 50%, transparent 0 90%, #000 90% 100%);
+}
+.dc-pact-mark {
+  position: relative;
+  width: 46%;
+  height: auto;
+  fill: var(--dc-fg);
+  filter: drop-shadow(0 3px 12px rgba(0, 0, 0, 0.65));
+}
+.dc-pact-wordmark {
+  font-family: var(--dc-font-display);
+  font-size: clamp(24px, 2.8vw, 42px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  color: var(--dc-fg);
+}
+.dc-pact-slogan {
+  margin-top: 11px;
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-faint);
+}
+.dc-pact-brand-rule {
+  width: 34px;
+  height: 3px;
+  margin-top: 24px;
+  background: var(--dc-accent);
+}
+
+/* 右侧文档块 */
+.dc-pact-doc {
+  min-width: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.dc-pact-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  font-size: clamp(23px, 2.5vw, 36px);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--dc-fg);
+}
+.dc-pact-title i {
+  display: block;
+  width: 5px;
+  height: 1.12em;
+  flex: none;
+  background: var(--dc-accent);
+}
+.dc-pact-hr {
+  height: 1px;
+  width: 64%;
+  margin: 22px 0 26px;
+  background-image: linear-gradient(to right, var(--dc-line-strong) 0 14px, transparent 14px 22px);
+  background-size: 22px 1px;
+  background-repeat: repeat-x;
+}
+.dc-pact-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 84%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 84%, transparent 100%);
+}
+.dc-pact-clause {
+  margin: 0 0 16px;
+  font-size: clamp(13px, 1.12vw, 16px);
+  line-height: 1.95;
+  letter-spacing: 0.02em;
+  color: var(--dc-fg-dim);
+}
+.dc-pact-clause b {
+  margin-right: 8px;
+  font-weight: 400;
+  color: var(--dc-accent);
+}
+
+/* ── 底部：同意按钮 ───────────────────────────────────────────────────── */
+.dc-pact-foot {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 0 28px;
+  border-top: 1px solid var(--dc-line);
+}
+.dc-accept {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  width: min(380px, 54vw);
+  height: clamp(60px, 7vh, 80px);
+  font-family: var(--dc-font-display);
+  color: #14160f;
+  background: var(--dc-accent);
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  box-shadow: 0 16px 44px -20px var(--dc-accent-glow);
+  transition: background 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+}
+.dc-accept:hover {
+  background: color-mix(in srgb, var(--dc-accent) 84%, #ffffff);
+  transform: translateY(-1px);
+}
+.dc-accept.is-accepted { background: color-mix(in srgb, var(--dc-accent) 76%, #ffffff); }
+
+.dc-accept-mark {
+  position: relative;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  border: 2px solid #14160f;
+  border-radius: 50%;
+  corner-shape: round;
+}
+.dc-accept-mark::after {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 4px;
+  width: 8px;
+  height: 13px;
+  border-right: 2px solid #14160f;
+  border-bottom: 2px solid #14160f;
+  transform: rotate(42deg);
+}
+.dc-accept-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+.dc-accept-label { font-size: clamp(17px, 1.55vw, 21px); font-weight: 700; letter-spacing: 0.14em; }
+.dc-accept-sub {
+  margin-top: 5px;
+  font-family: var(--dc-font-mono);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.26em;
+  opacity: 0.6;
+}
+/* 按钮四角的细角标（在按钮外面，所以用负偏移） */
+.dc-accept-corners { position: absolute; inset: 0; pointer-events: none; }
+.dc-accept-corners i {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--dc-accent);
+  opacity: 0.85;
+}
+.dc-accept-corners i:nth-child(1) { left: -9px; top: -9px; border-right: 0; border-bottom: 0; }
+.dc-accept-corners i:nth-child(2) { right: -9px; top: -9px; border-left: 0; border-bottom: 0; }
+.dc-accept-corners i:nth-child(3) { left: -9px; bottom: -9px; border-right: 0; border-top: 0; }
+.dc-accept-corners i:nth-child(4) { right: -9px; bottom: -9px; border-left: 0; border-top: 0; }
+
+/* ── 按下「同意」之后的科技线条 ──────────────────────────────────────────
+   全部"笔直方正"，没有一条斜线：
+     左右水平线从按钮两侧射出，上下垂直线从上下射出，
+     四个角标整体向外平移出去（原来那圈静态角标留在原位，形成双层套框）。
+   缓动 cubic-bezier(0.16,1,0.3,1) = 先猛冲出去，然后急刹。 */
+.dc-accept-fx { position: absolute; inset: 0; pointer-events: none; }
+.dc-accept-fx i {
+  position: absolute;
+  background: var(--dc-accent);
+  opacity: 0;
+  transition: transform calc(620ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1),
+              opacity calc(180ms / var(--dc-speed)) ease;
+}
+.dc-fx-l, .dc-fx-r { top: 50%; width: 92px; height: 2px; margin-top: -1px; }
+.dc-fx-l { right: 100%; transform-origin: 100% 50%; transform: scaleX(0); }
+.dc-fx-r { left: 100%;  transform-origin: 0 50%;   transform: scaleX(0); }
+.dc-fx-t, .dc-fx-b { left: 50%; width: 2px; height: 44px; margin-left: -1px; }
+.dc-fx-t { bottom: 100%; transform-origin: 50% 100%; transform: scaleY(0); }
+.dc-fx-b { top: 100%;    transform-origin: 50% 0;    transform: scaleY(0); }
+
+.dc-fx-c1, .dc-fx-c2, .dc-fx-c3, .dc-fx-c4 {
+  width: 16px;
+  height: 16px;
+  background: none;
+  border: 2px solid var(--dc-accent);
+  transform: translate(0, 0);
+}
+.dc-fx-c1 { left: -2px;  top: -2px;    border-right: 0; border-bottom: 0; }
+.dc-fx-c2 { right: -2px; top: -2px;    border-left: 0;  border-bottom: 0; }
+.dc-fx-c3 { left: -2px;  bottom: -2px; border-right: 0; border-top: 0; }
+.dc-fx-c4 { right: -2px; bottom: -2px; border-left: 0;  border-top: 0; }
+
+.dc-accept.is-pressed .dc-accept-fx i { opacity: 1; }
+.dc-accept.is-pressed .dc-fx-l,
+.dc-accept.is-pressed .dc-fx-r { transform: scaleX(1); }
+.dc-accept.is-pressed .dc-fx-t,
+.dc-accept.is-pressed .dc-fx-b { transform: scaleY(1); }
+.dc-accept.is-pressed .dc-fx-c1 { transform: translate(-28px, -28px); }
+.dc-accept.is-pressed .dc-fx-c2 { transform: translate(28px, -28px); }
+.dc-accept.is-pressed .dc-fx-c3 { transform: translate(-28px, 28px); }
+.dc-accept.is-pressed .dc-fx-c4 { transform: translate(28px, 28px); }
+
+/* 按下瞬间的"机械按压"：按钮下沉 2px，投影收进去，内阴影压出来 */
+.dc-accept.is-pressed {
+  transform: translateY(2px);
+  box-shadow: inset 0 5px 12px -5px rgba(0, 0, 0, 0.6),
+              0 5px 16px -12px var(--dc-accent-glow);
+  transition: transform calc(120ms / var(--dc-speed)) cubic-bezier(0.2, 0.8, 0.3, 1),
+              box-shadow calc(120ms / var(--dc-speed)) ease;
+}
+/* 文字换掉的瞬间藏在一次淡出里 —— 不做生硬切换。
+   JS 在 150ms 时改文字，正好落在 34% 那个暗点上。 */
+@keyframes dc-label-swap {
+  0%   { opacity: 1; }
+  34%  { opacity: 0; }
+  100% { opacity: 1; }
+}
+.dc-accept.is-pressed .dc-accept-text {
+  animation: dc-label-swap calc(460ms / var(--dc-speed)) ease;
+}
+/* 勾选标记重新画一遍 */
+@keyframes dc-check-in {
+  from { transform: rotate(42deg) scale(0); }
+  to   { transform: rotate(42deg) scale(1); }
+}
+.dc-accept.is-pressed .dc-accept-mark::after {
+  transform-origin: 50% 50%;
+  animation: dc-check-in calc(340ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 窄窗口：藏掉装饰、改成上下排 */
+@media (max-width: 900px) {
+  .dc-agree-side { display: none; }
+  .dc-pact { width: 92vw; height: 90vh; }
+  .dc-pact-main {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 22px;
+    overflow: auto;
+  }
+  .dc-pact-emblem { width: 92px; height: 92px; margin-bottom: 12px; }
+  .dc-pact-brand-rule { margin-top: 14px; }
+  .dc-code-col:nth-child(3) { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 M · 底图 + 框架层 HUD
+   ───────────────────────────────────────────────────────────────────────────
+   ① .dc-photo  那张工业剪影。背景图 URL 由 JS 写入 —— 因为 DSH 里是
+                /dsh-curtain/asset/xxx.jpg，离线预览页是 ../lib/assets/xxx.jpg。
+   ② .dc-hud    参考图里那一整圈精密框架：左上铭牌 / 右上授权 / 左右竖轨 /
+                右下待机 / 底栏。全部静态细线，零动画成本。
+   想调节密度：改 .dc-hud 的 --hud-pad，以及 .dc-hud-* 的 top/left/right。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 底图 ──────────────────────────────────────────────────────────────── */
+.dc-photo {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center bottom;
+  opacity: 0;
+  transition: opacity calc(1600ms / var(--dc-speed)) ease;
+}
+.dc-photo.dc-in { opacity: 1; }
+/* 压暗 + 顶部加重 + 暗角，一层伪元素搞定。
+   顶部最黑：HUD 的小字全在上下两端，需要底子干净。 */
+.dc-photo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(140% 112% at 50% 44%, transparent 40%, rgba(4, 5, 7, 0.66) 100%),
+    linear-gradient(to bottom,
+      rgba(7, 9, 12, 0.95) 0%,
+      rgba(7, 9, 12, 0.74) 26%,
+      rgba(7, 9, 12, 0.46) 52%,
+      rgba(7, 9, 12, 0.32) 74%,
+      rgba(7, 9, 12, 0.66) 100%);
+}
+
+/* ── ② 框架层 ────────────────────────────────────────────────────────────── */
+.dc-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity calc(1000ms / var(--dc-speed)) ease;
+  font-family: var(--dc-font-mono);
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.16em;
+  color: var(--dc-fg-faint);
+  text-transform: uppercase;
+}
+.dc-hud.dc-in { opacity: 1; }
+
+/* 左上：制造方铭牌 */
+.dc-hud-plate {
+  position: absolute;
+  top: var(--hud-inset);
+  left: var(--hud-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dc-hud-plate::before {
+  content: '';
+  width: 13px;
+  height: 2px;
+  margin-bottom: 7px;
+  background: var(--dc-accent);
+}
+.dc-hud-plate b {
+  font-family: var(--dc-font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--dc-fg);
+  margin-bottom: 5px;
+}
+.dc-hud-plate span { color: var(--dc-fg-faint); }
+
+/* 右上：授权与等级 */
+.dc-hud-auth {
+  position: absolute;
+  top: var(--hud-inset);
+  right: var(--hud-inset);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  text-align: right;
+}
+.dc-hud-auth-a { color: var(--dc-fg-dim); }
+.dc-hud-auth-b { color: var(--dc-fg-faint); }
+.dc-hud-auth-c {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--dc-accent);
+  letter-spacing: 0.22em;
+}
+.dc-hud-auth-c i {
+  display: block;
+  width: 36px;
+  height: 11px;
+  background: var(--dc-hazard);
+  opacity: 0.9;
+}
+
+/* 左轨：刻度尺 + 竖直进度条 */
+.dc-hud-rail-l {
+  position: absolute;
+  left: var(--hud-inset);
+  top: 27%;
+  height: 38%;
+  width: 30px;
+}
+.dc-hud-scale {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(to bottom, var(--dc-line-strong) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(to bottom, var(--dc-line) 0 1px, transparent 1px 13px);
+  background-size: 100% 100%, 44% 100%;
+  background-repeat: no-repeat;
+}
+.dc-hud-vbar {
+  position: absolute;
+  left: -17px;
+  top: 16%;
+  width: 3px;
+  height: 48%;
+  background: var(--dc-line);
+}
+.dc-hud-vbar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 58%;
+  background: var(--dc-accent);
+}
+
+/* 右轨：坐标 + 标高 */
+.dc-hud-rail-r {
+  position: absolute;
+  right: var(--hud-inset);
+  top: 38%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 24px;
+  text-align: right;
+}
+.dc-hud-coord { color: var(--dc-fg-faint); line-height: 1.75; }
+.dc-hud-elev { color: var(--dc-fg-faint); line-height: 1.6; }
+.dc-hud-elev b {
+  display: block;
+  color: var(--dc-accent);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+/* 右下：待机状态 */
+.dc-hud-standby {
+  position: absolute;
+  right: calc(var(--hud-inset) + 62px);
+  bottom: calc(var(--hud-pad) + 44px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  text-align: right;
+}
+.dc-hud-standby b { color: var(--dc-fg-dim); letter-spacing: 0.2em; font-weight: 600; }
+.dc-hud-standby span { color: var(--dc-fg-faint); }
+.dc-hud-standby i {
+  position: absolute;
+  right: -52px;
+  width: 3px;
+  height: 13px;
+  background: var(--dc-accent);
+}
+.dc-hud-standby i:nth-of-type(1) { bottom: 13px; }
+.dc-hud-standby i:nth-of-type(2) { bottom: 0; opacity: 0.5; }
+
+/* 底栏 */
+.dc-hud-bar {
+  position: absolute;
+  left: var(--hud-inset);
+  right: var(--hud-inset);
+  bottom: calc(var(--hud-pad) + 12px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 9px;
+  border-top: 1px solid var(--dc-line);
+}
+.dc-hud-bar-chip { display: flex; gap: 2px; flex: none; }
+.dc-hud-bar-chip i {
+  display: block;
+  width: 3px;
+  height: 11px;
+  background: var(--dc-accent);
+  opacity: 0.9;
+}
+.dc-hud-bar-chip i:nth-child(2n) { opacity: 0.4; }
+.dc-hud-bar-name { color: var(--dc-fg-dim); letter-spacing: 0.2em; flex: none; }
+.dc-hud-bar-track { flex: 1 1 auto; color: var(--dc-fg-ghost); }
+.dc-hud-bar-box {
+  flex: none;
+  width: 28px;
+  height: 9px;
+  border: 1px solid var(--dc-accent);
+  opacity: 0.75;
+}
+
+/* 窄窗口：砍掉竖轨和坐标，别糊成一团 */
+@media (max-width: 900px) {
+  .dc-hud-rail-l,
+  .dc-hud-rail-r,
+  .dc-hud-bar-track { display: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   报幕字幕
+   ───────────────────────────────────────────────────────────────────────────
+   顶部居中一条细带：上下各一条细线 + 左侧一枚琥珀方点 + 一句英文。
+   为什么在顶部：三个场景的正中都被占了（幕二协议卡 / 幕四的大圆和 START），
+   顶中是唯一全程空着的位置。右上角的 motto 在 x 方向距中心很远，撞不上。
+   动效刻意做得极简 —— 只淡入 + 上移 6px，没有位移、缩放、扫描。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-caption {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--hud-pad) + 56px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 20px;
+  font-family: var(--dc-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-transform: uppercase;
+  color: var(--dc-fg-dim);
+  pointer-events: none;
+  border-top: 1px solid var(--dc-line);
+  border-bottom: 1px solid var(--dc-line);
+  background: color-mix(in srgb, var(--dc-bg) 66%, transparent);
+  opacity: 0;
+  transform: translateX(-50%) translateY(-6px);
+  transition: opacity calc(260ms / var(--dc-speed)) ease,
+              transform calc(320ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-caption.dc-in { opacity: 1; transform: translateX(-50%) translateY(0); }
+.dc-caption > i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--dc-accent);
+}
+
+/* 窄窗口：字幕允许换行，别顶出屏幕 */
+@media (max-width: 720px) {
+  .dc-caption {
+    max-width: 88vw;
+    white-space: normal;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 N · 英雄屏（点完「同意」之后的界面）
+   ───────────────────────────────────────────────────────────────────────────
+   中央一枚大圆 + 手工画的「dsh」字标 + START；四周一圈 HUD 细节。
+   动态设计：
+     · 圆环 A 静止当基准；B（虚线）顺转、C（刻度）逆转，两个速度错开
+     · 十字轴从中心向四方伸出（先快后慢）
+     · 四枚黄色短划整体绕圆公转
+     · 两侧连线从中心向左右铺开
+     · 字标淡入 + 轻微放大，外带一层柔光
+     · START 的文字与四角标持续呼吸
+   节奏全靠 transition-delay 排序，全部挂在 .dc-hero.dc-in 上。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dc-hero {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;          /* 只有 START 自己打开点击 */
+  font-family: var(--dc-font-mono);
+  font-size: 9.5px;
+  line-height: 1.6;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-faint);
+  text-transform: uppercase;
+  transition: opacity calc(700ms / var(--dc-speed)) ease,
+              transform calc(900ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dc-hero.dc-in { opacity: 1; }
+.dc-hero.dc-gone { opacity: 0; transform: scale(1.03); }
+.dc-hero[hidden] { display: none !important; }
+
+/* 英雄屏期间把框架层里会撞位的几块让开，由英雄屏自己提供。
+   ⚠️ 右轨（.dc-hud-rail-r）也要算进来 —— 英雄屏右侧的厂区坐标
+   和它里面的坐标 / ELEVATION 是叠在同一个位置的。 */
+.dc-root.dc-hero-on .dc-hud-plate,
+.dc-root.dc-hero-on .dc-hud-auth,
+.dc-root.dc-hero-on .dc-hud-standby,
+.dc-root.dc-hero-on .dc-hud-rail-r,
+.dc-root.dc-hero-on .dc-foot {
+  opacity: 0;
+  transition: opacity calc(400ms / var(--dc-speed)) ease;
+}
+
+/* ── 中央：大圆 ────────────────────────────────────────────────────────── */
+.dc-hero-core {
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: clamp(340px, 39vw, 620px);
+  height: clamp(340px, 39vw, 620px);
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dc-hero-ring {
+  position: absolute;
+  border-radius: 50%;
+  corner-shape: round;
+}
+/* A：主圆环，静止 —— 它是整个构图的基准 */
+.dc-hero-ring-a { inset: 9%; border: 1px solid var(--dc-line-strong); }
+/* B：虚线环，顺时针慢转 */
+.dc-hero-ring-b {
+  inset: 3%;
+  border: 1px dashed color-mix(in srgb, var(--dc-fg) 20%, transparent);
+  animation: dc-hero-spin calc(74s / var(--dc-speed)) linear infinite;
+}
+/* C：刻度环，逆时针转（周期和 B 错开，永远不会同步） */
+.dc-hero-ring-c {
+  inset: 15%;
+  background: repeating-conic-gradient(from 0deg,
+      var(--dc-line-strong) 0deg 0.6deg, transparent 0.6deg 6deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 88%, #000 88% 100%);
+          mask: radial-gradient(circle at 50% 50%, transparent 0 88%, #000 88% 100%);
+  animation: dc-hero-spin-rev calc(98s / var(--dc-speed)) linear infinite;
+}
+@keyframes dc-hero-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes dc-hero-spin-rev { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+
+/* 十字轴：从中心向四方伸出 */
+.dc-hero-axis {
+  position: absolute;
+  background: color-mix(in srgb, var(--dc-fg) 24%, transparent);
+  transition: transform calc(1150ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(220ms / var(--dc-speed));
+}
+.dc-hero-axis-h {
+  left: -13%; right: -13%; top: 50%;
+  height: 1px;
+  transform: scaleX(0);
+  transform-origin: 50% 50%;
+}
+.dc-hero-axis-v {
+  top: -13%; bottom: -13%; left: 50%;
+  width: 1px;
+  transform: scaleY(0);
+  transform-origin: 50% 50%;
+}
+.dc-hero.dc-in .dc-hero-axis-h { transform: scaleX(1); }
+.dc-hero.dc-in .dc-hero-axis-v { transform: scaleY(1); }
+
+/* 四枚黄色短划：整体绕圆公转。每枚是一片旋转过的整圆，短划贴在自己顶端。 */
+.dc-hero-orbit {
+  position: absolute;
+  inset: 9%;
+  animation: dc-hero-spin calc(52s / var(--dc-speed)) linear infinite;
+}
+.dc-hero-chip {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  corner-shape: round;
+  opacity: 0;
+}
+.dc-hero.dc-in .dc-hero-chip { opacity: 1; }
+.dc-hero-chip::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: clamp(18px, 2vw, 28px);
+  height: 5px;
+  margin-left: calc(clamp(18px, 2vw, 28px) / -2);
+  background: var(--dc-accent);
+}
+
+/* 圆环内上方两枚小角标 */
+.dc-hero-brk {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--dc-fg-ghost);
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(760ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-brk { opacity: 1; }
+.dc-hero-brk-a { left: 27%; top: 5%; border-right: 0; border-bottom: 0; }
+.dc-hero-brk-b { right: 27%; top: 5%; border-left: 0; border-bottom: 0; }
+
+/* ── 中央：字标 ────────────────────────────────────────────────────────── */
+.dc-hero-mark {
+  position: relative;
+  width: 50%;
+  height: auto;
+  overflow: visible;
+  opacity: 0;
+  transform: scale(0.93);
+  transition: opacity calc(900ms / var(--dc-speed)) ease,
+              transform calc(1150ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(520ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-mark { opacity: 1; transform: none; }
+.dc-hero-mark-body {
+  fill: var(--dc-fg);
+  fill-rule: evenodd;            /* d 的碗里那圈反白靠它挖出来 */
+  shape-rendering: geometricPrecision;
+  filter: drop-shadow(0 0 9px rgba(255, 255, 255, 0.10));
+}
+.dc-hero-mark-accent { fill: var(--dc-accent); }
+.dc-hero-claim {
+  position: absolute;
+  left: 50%;
+  bottom: 5%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  color: var(--dc-fg-dim);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity calc(760ms / var(--dc-speed)) ease;
+  transition-delay: calc(940ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-claim { opacity: 1; }
+
+/* ── 两侧连线：从中心向左右铺开 ────────────────────────────────────────── */
+.dc-hero-wire {
+  position: absolute;
+  top: 47%;
+  height: 1px;
+  transition: transform calc(1050ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(780ms / var(--dc-speed));
+}
+.dc-hero-wire-l {
+  right: 50%;
+  width: 20vw;
+  margin-right: 14vw;
+  transform: scaleX(0);
+  transform-origin: 100% 50%;
+  background: linear-gradient(to left, var(--dc-accent), transparent);
+}
+.dc-hero-wire-r {
+  left: 50%;
+  width: 20vw;
+  margin-left: 14vw;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: linear-gradient(to right, var(--dc-accent), transparent);
+}
+.dc-hero.dc-in .dc-hero-wire-l,
+.dc-hero.dc-in .dc-hero-wire-r { transform: scaleX(1); }
+
+/* ── 左中：欢迎 ────────────────────────────────────────────────────────── */
+.dc-hero-hello {
+  position: absolute;
+  left: clamp(22px, 4vw, 68px);
+  top: 43%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 5px 14px;
+  text-align: left;
+  opacity: 0;
+  transform: translateX(-16px);
+  transition: opacity calc(720ms / var(--dc-speed)) ease,
+              transform calc(860ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(840ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-hello { opacity: 1; transform: none; }
+.dc-hero-hello > i {
+  grid-row: 1 / span 2;
+  width: 3px;
+  height: 100%;
+  min-height: 36px;
+  background: var(--dc-accent);
+}
+.dc-hero-hello b {
+  font-family: var(--dc-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--dc-fg);
+}
+.dc-hero-hello span { color: var(--dc-fg-faint); letter-spacing: 0.1em; }
+.dc-hero-hello em {
+  grid-column: 1 / -1;
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-right: 1px solid var(--dc-accent);
+  border-bottom: 1px solid var(--dc-accent);
+  transform: rotate(45deg);
+  animation: dc-hero-bob calc(2000ms / var(--dc-speed)) ease-in-out infinite;
+}
+@keyframes dc-hero-bob {
+  0%, 100% { transform: rotate(45deg) translate(0, 0); }
+  50%      { transform: rotate(45deg) translate(3px, 3px); }
+}
+
+/* ── 右中：厂区坐标 ────────────────────────────────────────────────────── */
+.dc-hero-geo {
+  position: absolute;
+  right: clamp(22px, 4vw, 68px);
+  top: 43%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  text-align: right;
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity calc(720ms / var(--dc-speed)) ease,
+              transform calc(860ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(900ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-geo { opacity: 1; transform: none; }
+.dc-hero-geo b {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 400;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg);
+}
+.dc-hero-geo b i {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid var(--dc-accent);
+}
+.dc-hero-geo span { color: var(--dc-fg-faint); }
+
+/* ── 左上：厂牌 ────────────────────────────────────────────────────────── */
+.dc-hero-brand {
+  position: absolute;
+  left: var(--hud-inset);
+  top: calc(var(--hud-inset) + 4px);
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1020ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-brand { opacity: 1; }
+.dc-hero-logo {
+  font-family: var(--dc-font-display);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: 0.02em;
+  color: var(--dc-fg);
+  text-transform: lowercase;
+}
+.dc-hero-brand-meta { display: flex; flex-direction: column; gap: 1px; padding-top: 3px; }
+.dc-hero-brand-meta i {
+  font-style: normal;
+  font-size: 8.5px;
+  letter-spacing: 0.22em;
+  color: var(--dc-fg-faint);
+}
+.dc-hero-brand-strip {
+  position: absolute;
+  left: var(--hud-inset);
+  top: calc(var(--hud-inset) + 56px);
+  width: 96px;
+  height: 9px;
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1100ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-brand-strip { opacity: 1; }
+.dc-hero-brand-strip::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 100%;
+  background: var(--dc-accent);
+}
+.dc-hero-brand-strip::after {
+  content: '';
+  position: absolute;
+  left: 36px;
+  top: 0;
+  width: 60px;
+  height: 100%;
+  background: repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--dc-fg) 24%, transparent) 0 4px, transparent 4px 9px);
+}
+
+/* ── 右上：口号 + 加号 ─────────────────────────────────────────────────── */
+.dc-hero-motto {
+  position: absolute;
+  right: calc(var(--hud-inset) + 32px);
+  top: calc(var(--hud-inset) + 8px);
+  letter-spacing: 0.28em;
+  color: var(--dc-fg-dim);
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1060ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-motto { opacity: 1; }
+.dc-hero-plus {
+  position: absolute;
+  right: var(--hud-inset);
+  top: calc(var(--hud-inset) + 5px);
+  width: 15px;
+  height: 15px;
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1060ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-plus { opacity: 1; }
+.dc-hero-plus::before,
+.dc-hero-plus::after {
+  content: '';
+  position: absolute;
+  background: var(--dc-accent);
+}
+.dc-hero-plus::before { left: 50%; top: 0; width: 1px; height: 100%; margin-left: -0.5px; }
+.dc-hero-plus::after { top: 50%; left: 0; height: 1px; width: 100%; margin-top: -0.5px; }
+
+/* ── 左下：系统信息 + 斜纹 ─────────────────────────────────────────────── */
+.dc-hero-sys {
+  position: absolute;
+  left: var(--hud-inset);
+  bottom: calc(var(--hud-pad) + 66px);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1140ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-sys { opacity: 1; }
+.dc-hero-sys b { font-weight: 400; letter-spacing: 0.22em; color: var(--dc-fg-dim); }
+.dc-hero-sys span { font-size: 8.5px; color: var(--dc-fg-faint); }
+.dc-hero-hazard {
+  position: absolute;
+  left: var(--hud-inset);
+  bottom: calc(var(--hud-pad) + 42px);
+  width: 108px;
+  height: 14px;
+  opacity: 0;
+  background: repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--dc-fg) 22%, transparent) 0 4px, transparent 4px 9px);
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1200ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-hazard { opacity: 1; }
+
+/* ── 右下 ──────────────────────────────────────────────────────────────── */
+.dc-hero-copy {
+  position: absolute;
+  right: calc(var(--hud-inset) + 54px);
+  bottom: calc(var(--hud-pad) + 58px);   /* 抬到框架层底栏那条横线之上 */
+  font-size: 8.5px;
+  letter-spacing: 0.2em;
+  color: var(--dc-fg-ghost);
+  opacity: 0;
+  transition: opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(1240ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-copy { opacity: 1; }
+
+/* ── 底部中央：START ───────────────────────────────────────────────────── */
+.dc-hero-start {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(66px, 9.5vh, 116px);
+  width: clamp(230px, 21vw, 340px);
+  height: clamp(58px, 7vh, 78px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  pointer-events: none;      /* 入场走完（.is-ready）才可点，避免抢在报幕前面 */
+  opacity: 0;
+  transform: translateX(-50%) translateY(12px);
+  transition: opacity calc(800ms / var(--dc-speed)) ease,
+              transform calc(940ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(1340ms / var(--dc-speed));
+}
+.dc-hero.is-ready .dc-hero-start {
+  opacity: 1;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.dc-hero-start-en {
+  font-family: var(--dc-font-display);
+  font-size: clamp(17px, 1.6vw, 23px);
+  font-weight: 600;
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;              /* 抵消末字后面多出来的字距，视觉才居中 */
+  color: var(--dc-accent);
+  animation: dc-hero-breath calc(2600ms / var(--dc-speed)) ease-in-out infinite;
+}
+.dc-hero-start-cn {
+  font-size: 10px;
+  letter-spacing: 0.26em;
+  text-indent: 0.26em;
+  color: var(--dc-fg-dim);
+}
+.dc-hero-start-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: dc-hero-brk-pulse calc(2600ms / var(--dc-speed)) ease-in-out infinite;
+  transition: transform calc(260ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-hero-start-corners i {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid color-mix(in srgb, var(--dc-accent) 55%, transparent);
+}
+.dc-hero-start-corners i:nth-child(1) { left: 0;    top: 0;    border-right: 0; border-bottom: 0; }
+.dc-hero-start-corners i:nth-child(2) { right: 0;   top: 0;    border-left: 0;  border-bottom: 0; }
+.dc-hero-start-corners i:nth-child(3) { left: 0;    bottom: 0; border-right: 0; border-top: 0; }
+.dc-hero-start-corners i:nth-child(4) { right: 0;   bottom: 0; border-left: 0;  border-top: 0; }
+
+@keyframes dc-hero-breath {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+@keyframes dc-hero-brk-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.07); }
+}
+
+/* 按下：整体弹一下，角标往外炸开，字变纯白 */
+.dc-hero-start.is-pressed .dc-hero-start-corners {
+  transform: scale(1.22);
+  animation: none;
+}
+.dc-hero-start.is-pressed .dc-hero-start-en {
+  color: #ffffff;
+  animation: none;
+}
+.dc-hero-start.is-pressed .dc-hero-start-cn { color: var(--dc-accent); }
+
+
+/* ── 按下 START 的弹簧动画 ────────────────────────────────────────────────
+   三样东西一起动：按钮本体挤压回弹、四角标向外炸开再收回、一圈描边扩散消失。
+   关键帧里必须带上 translateX(-50%) —— 那是按钮的定位基准，漏了会跳位。 */
+@keyframes dc-hero-spring {
+  0%   { transform: translateX(-50%) scale(1, 1); }
+  16%  { transform: translateX(-50%) scale(0.88, 0.84); }
+  38%  { transform: translateX(-50%) scale(1.13, 1.18); }
+  58%  { transform: translateX(-50%) scale(0.96, 0.95); }
+  76%  { transform: translateX(-50%) scale(1.05, 1.06); }
+  90%  { transform: translateX(-50%) scale(0.99, 0.99); }
+  100% { transform: translateX(-50%) scale(1, 1); }
+}
+.dc-hero-start.is-pressed {
+  animation: dc-hero-spring calc(900ms / var(--dc-speed)) cubic-bezier(0.3, 0.9, 0.3, 1) both;
+}
+@keyframes dc-hero-corners-spring {
+  0%   { transform: scale(1); }
+  26%  { transform: scale(1.6); }
+  55%  { transform: scale(1.12); }
+  78%  { transform: scale(1.34); }
+  100% { transform: scale(1.26); }
+}
+.dc-hero-start.is-pressed .dc-hero-start-corners {
+  animation: dc-hero-corners-spring calc(900ms / var(--dc-speed)) cubic-bezier(0.3, 0.9, 0.3, 1) both;
+}
+.dc-hero-start-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--dc-accent);
+  opacity: 0;
+  pointer-events: none;
+}
+@keyframes dc-hero-ring-out {
+  0%   { opacity: 0.85; transform: scale(1); }
+  70%  { opacity: 0.22; }
+  100% { opacity: 0; transform: scale(1.7); }
+}
+.dc-hero-start.is-pressed .dc-hero-start-ring {
+  animation: dc-hero-ring-out calc(820ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── 左下角旋转唱片 ────────────────────────────────────────────────────── */
+.dc-disc {
+  position: absolute;
+  left: var(--hud-inset);
+  bottom: calc(var(--hud-pad) + 42px);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  corner-shape: round;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--dc-line-strong), 0 8px 22px -12px rgba(0, 0, 0, 0.9);
+  background:
+    radial-gradient(circle at 50% 50%,
+        var(--dc-accent) 0 6px, var(--dc-bg) 6px 8px, transparent 8px),
+    repeating-radial-gradient(circle at 50% 50%,
+        rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 4px),
+    radial-gradient(circle at 50% 50%, #1b2026, #0b0e11);
+  animation: dc-disc-spin calc(3600ms / var(--dc-speed)) linear infinite;
+}
+@keyframes dc-disc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* 英雄屏的信息块给唱片让位 */
+.dc-hero-sys { bottom: calc(var(--hud-pad) + 124px); }
+.dc-hero-hazard { left: calc(var(--hud-inset) + 60px); }
+
+@media (prefers-reduced-motion: reduce) {
+  html:not(.dc-force-motion) .dc-disc { animation: none !important; }
+}
+
+
+/* ── 英雄屏加长版入场编排 ────────────────────────────────────────────────
+   原来 1.34 秒就把画面铺完了，用户立刻能点 START，导致第三句报幕被抢拍。
+   现在拉到 4.4 秒，多出来的时间用这些动作填满 —— 全部只动 transform / opacity。 */
+
+/* ① 圆内雷达扫描：一直慢慢转，给静止画面一点"在工作"的生命感 */
+.dc-hero-core::before {
+  content: '';
+  position: absolute;
+  inset: 3%;
+  border-radius: 50%;
+  corner-shape: round;
+  pointer-events: none;
+  background: conic-gradient(from 0deg,
+      color-mix(in srgb, var(--dc-fg) 9%, transparent) 0deg,
+      transparent 46deg 360deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 30%, #000 42% 100%);
+          mask: radial-gradient(circle at 50% 50%, transparent 0 30%, #000 42% 100%);
+  opacity: 0;
+  transition: opacity calc(1200ms / var(--dc-speed)) ease;
+  transition-delay: calc(900ms / var(--dc-speed));
+  animation: dc-hero-spin calc(9000ms / var(--dc-speed)) linear infinite;
+}
+.dc-hero.dc-in .dc-hero-core::before { opacity: 1; }
+
+/* ② 刻度环：从大一圈缩到位（原来只是淡入，太安静） */
+.dc-hero-ring-c {
+  transform: scale(1.34);
+  opacity: 0;
+  transition: transform calc(1400ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1),
+              opacity calc(900ms / var(--dc-speed)) ease;
+  transition-delay: calc(260ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-ring-c { transform: scale(1); opacity: 1; }
+
+/* ③ 四枚黄色短划：从外侧转着飞进来，落到各自位置。
+   ⚠️ 入场 transform 必须加在**短划自己**身上，不能加在 .dc-hero-orbit 上 ——
+   orbit 有一条 dc-hero-spin 旋转动画，动画会直接覆盖 transition 的 transform，
+   加在它身上等于没加（踩过）。 */
+.dc-hero-chip {
+  --a: 0deg;
+  transform: rotate(calc(var(--a) - 78deg)) scale(1.7);
+  transition: transform calc(1700ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1),
+              opacity calc(700ms / var(--dc-speed)) ease;
+  transition-delay: calc(700ms / var(--dc-speed));
+}
+.dc-hero.dc-in .dc-hero-chip { transform: rotate(var(--a)) scale(1); }
+.dc-hero-chip:nth-child(1) { --a: 45deg; }
+.dc-hero-chip:nth-child(2) { --a: 135deg; }
+.dc-hero-chip:nth-child(3) { --a: 225deg; }
+.dc-hero-chip:nth-child(4) { --a: 315deg; }
+
+/* ④ 字标下方一条扫描线扫过去（只扫一次，不循环） */
+.dc-hero-mark::after {
+  content: '';
+  position: absolute;
+  left: -6%;
+  right: -6%;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--dc-accent), transparent);
+  opacity: 0;
+}
+@keyframes dc-hero-sweep {
+  0%   { opacity: 0; transform: translateY(0); }
+  12%  { opacity: 0.95; }
+  88%  { opacity: 0.95; }
+  100% { opacity: 0; transform: translateY(100px); }
+}
+.dc-hero.dc-in .dc-hero-mark::after {
+  animation: dc-hero-sweep calc(1500ms / var(--dc-speed)) cubic-bezier(0.4, 0, 0.3, 1) calc(1500ms / var(--dc-speed)) both;
+}
+
+/* ⑤ 顶栏两条横线从中心向两侧长出来 */
+.dc-hero-hello > i,
+.dc-hero-geo b i {
+  transform-origin: 50% 50%;
+  transition: transform calc(900ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dc-hero-hello > i { transform: scaleY(0); }
+.dc-hero-geo b i { transform: scaleX(0); }
+.dc-hero.dc-in .dc-hero-hello > i { transform: scaleY(1); }
+.dc-hero.dc-in .dc-hero-geo b i { transform: scaleX(1); }
+
+/* ⑥ START 的四角标从远处收进来（机械感） */
+.dc-hero-start-corners i {
+  transition: transform calc(760ms / var(--dc-speed)) cubic-bezier(0.16, 1, 0.3, 1),
+              opacity calc(500ms / var(--dc-speed)) ease;
+  opacity: 0;
+}
+.dc-hero-start-corners i:nth-child(1) { transform: translate(-38px, -38px); }
+.dc-hero-start-corners i:nth-child(2) { transform: translate(38px, -38px); }
+.dc-hero-start-corners i:nth-child(3) { transform: translate(-38px, 38px); }
+.dc-hero-start-corners i:nth-child(4) { transform: translate(38px, 38px); }
+.dc-hero.is-ready .dc-hero-start-corners i { transform: translate(0, 0); opacity: 1; }
+
+/* ⑦ 把入场时序整体拉长：每块的出现时刻往后铺开 */
+.dc-hero-wire { transition-delay: calc(1000ms / var(--dc-speed)); }
+.dc-hero-hello { transition-delay: calc(1240ms / var(--dc-speed)); }
+.dc-hero-geo { transition-delay: calc(1420ms / var(--dc-speed)); }
+.dc-hero-brk { transition-delay: calc(1120ms / var(--dc-speed)); }
+.dc-hero-claim { transition-delay: calc(1500ms / var(--dc-speed)); }
+.dc-hero-motto { transition-delay: calc(1700ms / var(--dc-speed)); }
+.dc-hero-plus { transition-delay: calc(1700ms / var(--dc-speed)); }
+.dc-hero-brand { transition-delay: calc(1700ms / var(--dc-speed)); }
+.dc-hero-brand-strip { transition-delay: calc(1800ms / var(--dc-speed)); }
+.dc-hero-sys { transition-delay: calc(1950ms / var(--dc-speed)); }
+.dc-hero-hazard { transition-delay: calc(2050ms / var(--dc-speed)); }
+.dc-hero-copy { transition-delay: calc(2150ms / var(--dc-speed)); }
+.dc-hero-start { transition-delay: calc(0ms / var(--dc-speed)); }   /* 由 .is-ready 触发 */
+
+
+/* 窄窗口：砍掉左右两块和连线，保住中央 */
+@media (max-width: 900px) {
+  .dc-hero-hello,
+  .dc-hero-geo,
+  .dc-hero-wire,
+  .dc-hero-brand-strip { display: none; }
+  .dc-hero-core { width: 74vw; height: 74vw; }
+  .dc-hero-copy { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   美术区 O · 无障碍：系统开了「减少动态效果」时
+   ───────────────────────────────────────────────────────────────────────────
+   关掉"持续动效"，但保留一次性入场 —— 否则关掉 Windows 动画的机器上什么都看不见。
+   设置页里勾「强制播放动效」会跳过这一整块（JS 给 <html> 挂 dc-force-motion）。
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  html:not(.dc-force-motion) .dc-dial-scan,
+  html:not(.dc-force-motion) .dc-dial-sheen::before,
+  html:not(.dc-force-motion) .dc-code-track,
+  html:not(.dc-force-motion) .dc-scanline.dc-go,
+
+  html:not(.dc-force-motion) .dc-dial-scan { opacity: 0.5; }
+
+  /* 像素幕改成整块淡出，不逐格闪 */
+  html:not(.dc-force-motion) .dc-pixel i {
+    animation: none !important;
+    opacity: 0;
+  }
+  html:not(.dc-force-motion) .dc-accept-fx { display: none; }
+  html:not(.dc-force-motion) .dc-accept.is-pressed .dc-accept-text,
+  html:not(.dc-force-motion) .dc-accept.is-pressed .dc-accept-mark::after {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "dsh-curtain",
+  "version": "0.1.0",
+  "description": "DSH 开机动画：暗色重工业 HUD 风格，带协议卡、英雄屏、英文报幕与字幕。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "splash",
+    "boot-animation"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-curtain · 离线预览</title>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     离线预览页
+     ───────────────────────────────────────────────────────────────────────
+     它加载的是和 DSH 里【完全同一份】lib/boot.css 与 lib/boot.js，
+     所以这里看到什么，装进 DSH 就是什么。
+
+     迭代循环：
+       改 lib/boot.css                → 按 F5，秒级看到效果
+       改 lib/boot.js 顶部美术区常量  → 点「重播」或按 R
+
+     面板里调的值会存进浏览器本地（localStorage），**刷新不会丢**。
+     满意之后点「导出当前值」，把数值粘回 lib/boot.css / lib/boot.js。
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+<script>
+  /* ── 文件默认值：改 lib/boot.js 的 DEFAULTS 时，这里也同步一份 ────────── */
+  var FILE_DEFAULTS = {
+    enabled: true,
+    mode: 'always',            /* 预览页每次都播 */
+    speed: 1,
+    requireInteraction: true,  /* 预览时打开确认节拍，方便看交互态 */
+    allowSkip: true,
+    sound: true,
+    soundVolume: 0.5,
+    forceMotion: false,
+    brand: 'DEEPSEEK',
+    title: 'HARNESS',
+    subtitle: 'SYNTHESIZE INTELLIGENCE',
+    footer: 'POWERED BY DEEPSEEK',
+    accent: '#0b5fff',
+    bg: '#ffffff',
+    fg: '#14171a'
+  }
+
+  var STORAGE_KEY = 'dsh-curtain:preview'
+
+  function loadSaved() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY)
+      var obj = raw ? JSON.parse(raw) : null
+      return (obj && typeof obj === 'object') ? obj : {}
+    } catch (e) { return {} }
+  }
+
+  /* 合并顺序：文件默认值 ← 浏览器里存的上次改动 */
+  window.__DSH_CURTAIN__ = Object.assign({}, FILE_DEFAULTS, loadSaved())
+  window.__DSH_CURTAIN_FILE_DEFAULTS__ = FILE_DEFAULTS
+  window.__DSH_CURTAIN_STORAGE_KEY__ = STORAGE_KEY
+
+  /* file:// 下没有 HTTP 路由，所以把资源路径指到本地相对路径 */
+  window.__DSH_CURTAIN_BOOT__ = 'preview'
+  window.__DSH_CURTAIN_BASE__ = '..'
+  window.__DSH_CURTAIN_ASSET_BASE__ = '../lib/assets'
+  window.__DSH_CURTAIN_SCRIPT_URL__ = '../lib/boot.js'
+</script>
+
+<link rel="stylesheet" href="../lib/boot.css">
+
+<style>
+  /* ── 预览页自己的控制面板，不进插件 ─────────────────────────────────── */
+  /* 注意：#pv-toggle 是 #pv 的兄弟节点，不是子节点 —— 不能写成 #pv .pv-toggle，
+     否则它拿不到定位和 z-index，会被全屏覆盖层压在下面点不到。 */
+  #pv, #pv-toggle {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 2147483600;
+    font: 12px/1.5 ui-monospace, Consolas, monospace;
+    color: #cfd2d6;
+    background: rgba(12, 13, 16, .9);
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
+    max-width: min(720px, calc(100vw - 24px));
+    box-sizing: border-box;
+  }
+  #pv[hidden], #pv-toggle[hidden] { display: none !important; }
+
+  #pv-toggle { padding: 6px 14px; cursor: pointer; letter-spacing: .06em; }
+  #pv-toggle:hover { background: rgba(30, 32, 38, .95); }
+
+  #pv .pv-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 7px 12px; border-bottom: 1px solid rgba(255, 255, 255, .1);
+    letter-spacing: .06em; opacity: .88;
+  }
+  #pv .pv-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  #pv .pv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #pv label { opacity: .72; min-width: 46px; }
+  #pv input[type=text] {
+    flex: 1 1 140px; min-width: 80px;
+    background: rgba(255, 255, 255, .06); color: inherit;
+    border: 1px solid rgba(255, 255, 255, .16); border-radius: 6px;
+    padding: 4px 7px; font: inherit; outline: none;
+  }
+  #pv input[type=color] {
+    width: 34px; height: 22px; padding: 0; cursor: pointer;
+    background: transparent; border: 1px solid rgba(255, 255, 255, .16); border-radius: 5px;
+  }
+  #pv input[type=range] { flex: 1 1 120px; }
+  #pv select {
+    background: rgba(255, 255, 255, .06); color: inherit;
+    border: 1px solid rgba(255, 255, 255, .16); border-radius: 6px;
+    padding: 4px 6px; font: inherit; outline: none;
+  }
+  #pv button {
+    background: rgba(255, 255, 255, .08); color: inherit; cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, .16); border-radius: 6px;
+    padding: 4px 10px; font: inherit;
+  }
+  #pv button:hover { background: rgba(255, 255, 255, .16); }
+  #pv .pv-saved { color: #6ee7a8; }
+  #pv .pv-note { opacity: .55; font-size: 11px; }
+  #pv textarea {
+    width: 100%; height: 160px; box-sizing: border-box; resize: vertical;
+    background: rgba(0, 0, 0, .5); color: #cfd2d6;
+    border: 1px solid rgba(255, 255, 255, .16); border-radius: 6px;
+    padding: 8px; font: 11px/1.55 ui-monospace, Consolas, monospace; white-space: pre;
+  }
+</style>
+</head>
+<body>
+
+<button id="pv-toggle" hidden>⚙ 预览控制</button>
+
+<div id="pv">
+  <div class="pv-head">
+    <span>dsh-curtain · 离线预览</span>
+    <span>
+      <button id="pv-replay">重播</button>
+      <button id="pv-skip">跳过</button>
+      <button id="pv-hide">收起</button>
+    </span>
+  </div>
+  <div class="pv-body">
+    <div class="pv-row">
+      <label>强调色</label><input type="color" id="pv-accent">
+      <label>背景</label><input type="color" id="pv-bg">
+      <label>前景</label><input type="color" id="pv-fg">
+      <label>速度</label>
+      <input type="range" id="pv-speed" min="0.35" max="3" step="0.05">
+      <span id="pv-speed-val">1.00×</span>
+    </div>
+    <div class="pv-row">
+      <label>品牌</label><input type="text" id="pv-brand">
+      <label>主标题</label><input type="text" id="pv-title">
+    </div>
+    <div class="pv-row">
+      <label>副标题</label><input type="text" id="pv-subtitle">
+    </div>
+    <div class="pv-row">
+      <label>页脚</label><input type="text" id="pv-footer">
+    </div>
+    <div class="pv-row">
+      <label>播放时机</label>
+      <select id="pv-mode">
+        <option value="always">每次打开都播放</option>
+        <option value="session">每个会话一次</option>
+        <option value="daily">每天一次</option>
+      </select>
+      <label style="min-width:auto"><input type="checkbox" id="pv-ri"> 需确认</label>
+      <label style="min-width:auto"><input type="checkbox" id="pv-skipallow"> 可跳过</label>
+      <label style="min-width:auto"><input type="checkbox" id="pv-sound"> 音效</label>
+    </div>
+    <div class="pv-row">
+      <button id="pv-export">导出当前值</button>
+      <button id="pv-reset">恢复文件默认值</button>
+      <span id="pv-state" class="pv-note">改动会存在浏览器里，刷新不丢</span>
+    </div>
+    <textarea id="pv-out" hidden readonly></textarea>
+    <div class="pv-note">
+      快捷键：<b>R</b> 重播 · <b>S</b> 跳过。
+      改 <b>lib/boot.css</b> 后 F5 即可。面板里调的值只影响预览，
+      满意后点「导出当前值」把它们粘回 lib/boot.css 和 lib/boot.js。
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var cfg = window.__DSH_CURTAIN__
+  var STORAGE_KEY = window.__DSH_CURTAIN_STORAGE_KEY__
+
+  var $ = function (id) { return document.getElementById(id) }
+  var panel = $('pv')
+  var toggle = $('pv-toggle')
+  var out = $('pv-out')
+  var stateEl = $('pv-state')
+
+  /* ── 持久化：每次改动都写进 localStorage，刷新不丢 ───────────────────── */
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg))
+      stateEl.textContent = '✓ 已存到浏览器（刷新不丢）'
+      stateEl.className = 'pv-saved'
+    } catch (e) {
+      stateEl.textContent = '⚠ 存不进浏览器（可能是隐私模式）'
+      stateEl.className = 'pv-note'
+    }
+  }
+
+  /* ── 即时生效：颜色和速度直接改 CSS 变量 ─────────────────────────────── */
+  function applyLive() {
+    var root = document.getElementById('dsh-curtain-root')
+    if (!root) return
+    root.style.setProperty('--dc-accent', cfg.accent)
+    root.style.setProperty('--dc-bg', cfg.bg)
+    root.style.setProperty('--dc-fg', cfg.fg)
+    root.style.setProperty('--dc-speed', String(cfg.speed))
+  }
+
+  function syncInputs() {
+    $('pv-accent').value = cfg.accent
+    $('pv-bg').value = cfg.bg
+    $('pv-fg').value = cfg.fg
+    $('pv-speed').value = cfg.speed
+    $('pv-speed-val').textContent = Number(cfg.speed).toFixed(2) + '×'
+    $('pv-brand').value = cfg.brand
+    $('pv-title').value = cfg.title
+    $('pv-subtitle').value = cfg.subtitle
+    $('pv-footer').value = cfg.footer
+    $('pv-mode').value = cfg.mode
+    $('pv-ri').checked = !!cfg.requireInteraction
+    $('pv-skipallow').checked = !!cfg.allowSkip
+    $('pv-sound').checked = !!cfg.sound
+  }
+
+  /* 颜色 / 速度：即时生效 */
+  ;['accent', 'bg', 'fg'].forEach(function (key) {
+    $('pv-' + key).addEventListener('input', function (e) {
+      cfg[key] = e.target.value
+      applyLive(); save()
+    })
+  })
+  $('pv-speed').addEventListener('input', function (e) {
+    cfg.speed = Number(e.target.value)
+    $('pv-speed-val').textContent = cfg.speed.toFixed(2) + '×'
+    applyLive(); save()
+  })
+
+  /* 文案：文字是建 DOM 时写进去的，改完要重播 */
+  ;['brand', 'title', 'subtitle', 'footer'].forEach(function (key) {
+    $('pv-' + key).addEventListener('input', function (e) {
+      cfg[key] = e.target.value
+      save()
+      stateEl.textContent = '文案改了 —— 点「重播」生效'
+      stateEl.className = 'pv-note'
+    })
+  })
+
+  $('pv-mode').addEventListener('change', function (e) { cfg.mode = e.target.value; save() })
+  $('pv-ri').addEventListener('change', function (e) {
+    cfg.requireInteraction = e.target.checked; save()
+    stateEl.textContent = '点「重播」生效'; stateEl.className = 'pv-note'
+  })
+  $('pv-skipallow').addEventListener('change', function (e) {
+    cfg.allowSkip = e.target.checked; save()
+    stateEl.textContent = '点「重播」生效'; stateEl.className = 'pv-note'
+  })
+  $('pv-sound').addEventListener('change', function (e) { cfg.sound = e.target.checked; save() })
+
+  /* ── 重播 ────────────────────────────────────────────────────────────── */
+  function replay() {
+    var api = window.__DSH_CURTAIN_API__
+    if (api && typeof api.replay === 'function') {
+      api.replay()
+      setTimeout(applyLive, 40)
+      setTimeout(applyLive, 260)
+      stateEl.textContent = '已重播'
+      stateEl.className = 'pv-saved'
+    } else {
+      stateEl.textContent = '动画还没加载好，改为刷新页面'
+      stateEl.className = 'pv-note'
+      setTimeout(function () { location.reload() }, 300)
+    }
+  }
+
+  function doSkip() {
+    var api = window.__DSH_CURTAIN_API__
+    if (api && typeof api.skip === 'function') api.skip()
+  }
+
+  /* ── 导出当前值：把面板里调好的数字变成可以粘回文件的文本 ────────────── */
+  function exportValues() {
+    var lines = []
+    lines.push('/* ── 粘进 lib/boot.js 的 DEFAULTS ───────────────────────────── */')
+    ;['enabled', 'mode', 'speed', 'requireInteraction', 'allowSkip', 'sound', 'soundVolume',
+      'forceMotion', 'brand', 'title', 'subtitle', 'footer', 'accent', 'bg', 'fg'
+    ].forEach(function (k) {
+      lines.push('  ' + k + ': ' + JSON.stringify(cfg[k]) + ',')
+    })
+    lines.push('')
+    lines.push('/* ── 粘进 lib/boot.css 的「美术区 A」（.dc-root 里）──────────── */')
+    lines.push('  --dc-bg: ' + cfg.bg + ';')
+    lines.push('  --dc-fg: ' + cfg.fg + ';')
+    lines.push('  --dc-accent: ' + cfg.accent + ';')
+    lines.push('')
+    lines.push('/* 提醒：boot.js 的 DEFAULTS 和 lib/index.js 的 DEFAULTS 是两份，')
+    lines.push('   改默认值时两边都要同步，否则行为会不一致。 */')
+    out.value = lines.join('\n')
+    out.hidden = false
+    out.focus()
+    out.select()
+    stateEl.textContent = '已生成，Ctrl+C 复制'
+    stateEl.className = 'pv-saved'
+  }
+
+  function resetToFile() {
+    try { localStorage.removeItem(STORAGE_KEY) } catch (e) {}
+    location.reload()
+  }
+
+  $('pv-replay').addEventListener('click', replay)
+  $('pv-skip').addEventListener('click', doSkip)
+  $('pv-export').addEventListener('click', exportValues)
+  $('pv-reset').addEventListener('click', resetToFile)
+
+  $('pv-hide').addEventListener('click', function () {
+    panel.hidden = true
+    toggle.hidden = false
+  })
+  toggle.addEventListener('click', function () {
+    panel.hidden = false
+    toggle.hidden = true
+  })
+
+  /* 键盘快捷键：R 重播、S 跳过（面板收起时也能用） */
+  document.addEventListener('keydown', function (e) {
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+    if (e.key === 'r' || e.key === 'R') replay()
+    if (e.key === 's' || e.key === 'S') doSkip()
+  })
+
+  syncInputs()
+  applyLive()
+  setTimeout(applyLive, 200)
+})()
+</script>
+
+<script src="../lib/boot.js"></script>
+</body>
+</html>
