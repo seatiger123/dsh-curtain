@@ -5,4 +5,4 @@ Thumbs.db
 .edge-*/
 
 # 第三方素材，未随仓库分发（用户自备）
-lib/assets/bgm.m4a
+lib/assets/bgm.*
